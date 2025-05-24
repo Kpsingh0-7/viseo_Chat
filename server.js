@@ -1,6 +1,7 @@
 const WebSocket = require("ws");
 const express = require("express");
 const http = require("http");
+const axios = require("axios");
 
 const app = express();
 const server = http.createServer(app);
@@ -9,6 +10,35 @@ const wss = new WebSocket.Server({ server });
 const waitingQueue = [];
 const activeUsers = new Map();
 
+// Fetch ICE servers from Xirsys
+async function getXirsysIceServers() {
+  try {
+    const response = await axios.put(
+      "https://global.xirsys.net/_turn/MyFirstApp",
+      {},
+      {
+        auth: {
+          username: "kpsingh",
+          password: "de4e0f06-3893-11f0-8a78-0242ac150003",
+        },
+      }
+    );
+    // Correct path to iceServers
+    return response.data.d.iceServers || [];
+  } catch (error) {
+    console.error("Failed to fetch Xirsys ICE servers", error.message);
+    return [];
+  }
+}
+
+
+// Endpoint to get ICE servers from client
+app.get("/ice", async (req, res) => {
+  const iceServers = await getXirsysIceServers();
+  res.json({ iceServers });
+});
+
+// WebSocket pairing logic
 function tryToPair(ws) {
   console.log("tryToPair called, waitingQueue length:", waitingQueue.length);
   while (waitingQueue.length > 0) {
@@ -96,7 +126,7 @@ wss.on("connection", (ws) => {
   });
 });
 
-// Optional keep-alive ping to keep connections alive behind proxies
+// Optional keep-alive ping
 setInterval(() => {
   wss.clients.forEach((ws) => {
     if (ws.readyState === WebSocket.OPEN) ws.ping();
@@ -104,4 +134,6 @@ setInterval(() => {
 }, 30000);
 
 const PORT = 8080;
-server.listen(PORT, () => console.log(`Server running on ws://localhost:${PORT}`));
+server.listen(PORT, () =>
+  console.log(`Server running on ws://localhost:${PORT}`)
+);
