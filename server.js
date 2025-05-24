@@ -1,6 +1,7 @@
 const WebSocket = require("ws");
 const express = require("express");
 const http = require("http");
+
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
@@ -9,20 +10,27 @@ const waitingQueue = [];
 const activeUsers = new Map();
 
 function tryToPair(ws) {
+  console.log("tryToPair called, waitingQueue length:", waitingQueue.length);
   while (waitingQueue.length > 0) {
     const partner = waitingQueue.shift();
-    if (partner.readyState !== WebSocket.OPEN) continue;
+    if (partner.readyState !== WebSocket.OPEN) {
+      console.log("Partner socket not open, skipping");
+      continue;
+    }
 
     activeUsers.set(ws, { partner, state: "paired" });
     activeUsers.set(partner, { partner: ws, state: "paired" });
 
     ws.send(JSON.stringify({ type: "paired" }));
     partner.send(JSON.stringify({ type: "paired" }));
+
+    console.log("Paired two clients");
     return;
   }
 
   waitingQueue.push(ws);
   activeUsers.set(ws, { partner: null, state: "waiting" });
+  console.log("Added client to waiting queue");
 }
 
 function handleNext(ws) {
@@ -35,6 +43,7 @@ function handleNext(ws) {
       partner.send(JSON.stringify({ type: "partner-disconnected" }));
       activeUsers.set(partner, { partner: null, state: "waiting" });
       waitingQueue.push(partner);
+      console.log("Partner pushed back to waiting queue");
     }
   }
 
@@ -43,6 +52,7 @@ function handleNext(ws) {
 }
 
 wss.on("connection", (ws) => {
+  console.log("New client connected");
   tryToPair(ws);
 
   ws.on("message", (msg) => {
@@ -58,6 +68,7 @@ wss.on("connection", (ws) => {
     const partner = user?.partner;
 
     if (data.type === "next") {
+      console.log("Received 'next' from client");
       handleNext(ws);
     } else if (data.type === "chat" && partner?.readyState === WebSocket.OPEN) {
       partner.send(JSON.stringify({ type: "chat", message: data.message }));
@@ -67,6 +78,7 @@ wss.on("connection", (ws) => {
   });
 
   ws.on("close", () => {
+    console.log("Client disconnected");
     const user = activeUsers.get(ws);
     const partner = user?.partner;
 
@@ -74,6 +86,7 @@ wss.on("connection", (ws) => {
       partner.send(JSON.stringify({ type: "partner-disconnected" }));
       activeUsers.set(partner, { partner: null, state: "waiting" });
       waitingQueue.push(partner);
+      console.log("Partner pushed back to waiting queue due to disconnect");
     }
 
     const i = waitingQueue.indexOf(ws);
@@ -83,13 +96,12 @@ wss.on("connection", (ws) => {
   });
 });
 
-// Optional: keep-alive ping
+// Optional keep-alive ping to keep connections alive behind proxies
 setInterval(() => {
   wss.clients.forEach((ws) => {
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.ping();
-    }
+    if (ws.readyState === WebSocket.OPEN) ws.ping();
   });
 }, 30000);
 
-server.listen(8080, "0.0.0.0", () => console.log("Server running on http://localhost:8080"));
+const PORT = 8080;
+server.listen(PORT, () => console.log(`Server running on ws://localhost:${PORT}`));
