@@ -7,8 +7,17 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
+
 const waitingQueue = [];
 const activeUsers = new Map();
+
+const cors = require("cors");
+
+app.use(
+  cors({
+    origin: "https://video-chat-82u9.onrender.com", // your frontend origin
+  })
+);
 
 // Fetch ICE servers from Xirsys
 async function getXirsysIceServers() {
@@ -23,8 +32,10 @@ async function getXirsysIceServers() {
         },
       }
     );
-    // Correct path to iceServers
-    return response.data.d.iceServers || [];
+    console.log("Xirsys response data:", response.data); // Add this line
+    
+    // Safely check for iceServers property
+    return response.data?.d?.iceServers || [];
   } catch (error) {
     console.error("Failed to fetch Xirsys ICE servers", error.message);
     return [];
