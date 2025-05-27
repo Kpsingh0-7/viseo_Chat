@@ -7,7 +7,7 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: "http://localhost:5173", // change this to your frontend domain in production
+    origin: "https://video-chat-82u9.onrender.com", // change this to your frontend domain in production
     methods: ["GET", "POST"],
   },
 });
