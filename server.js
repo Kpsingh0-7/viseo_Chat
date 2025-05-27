@@ -1,150 +1,73 @@
-const WebSocket = require("ws");
 const express = require("express");
 const http = require("http");
-const axios = require("axios");
+const { Server } = require("socket.io");
+const cors = require("cors");
 
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
-
-
-const waitingQueue = [];
-const activeUsers = new Map();
-
-const cors = require("cors");
-
-app.use(
-  cors({
-    origin: "https://video-chat-82u9.onrender.com", // your frontend origin
-  })
-);
-
-// Fetch ICE servers from Xirsys
-async function getXirsysIceServers() {
-  try {
-    const response = await axios.put(
-      "https://global.xirsys.net/_turn/MyFirstApp",
-      {},
-      {
-        auth: {
-          username: "kpsingh",
-          password: "de4e0f06-3893-11f0-8a78-0242ac150003",
-        },
-      }
-    );
-    console.log("Xirsys response data:", response.data); // Add this line
-    
-    // Safely check for iceServers property
-    return response.data?.d?.iceServers || [];
-  } catch (error) {
-    console.error("Failed to fetch Xirsys ICE servers", error.message);
-    return [];
-  }
-}
-
-
-// Endpoint to get ICE servers from client
-app.get("/ice", async (req, res) => {
-  const iceServers = await getXirsysIceServers();
-  res.json({ iceServers });
+const io = new Server(server, {
+  cors: {
+    origin: "http://localhost:5173", // change this to your frontend domain in production
+    methods: ["GET", "POST"],
+  },
 });
-
-// WebSocket pairing logic
-function tryToPair(ws) {
-  console.log("tryToPair called, waitingQueue length:", waitingQueue.length);
-  while (waitingQueue.length > 0) {
-    const partner = waitingQueue.shift();
-    if (partner.readyState !== WebSocket.OPEN) {
-      console.log("Partner socket not open, skipping");
-      continue;
-    }
-
-    activeUsers.set(ws, { partner, state: "paired" });
-    activeUsers.set(partner, { partner: ws, state: "paired" });
-
-    ws.send(JSON.stringify({ type: "paired" }));
-    partner.send(JSON.stringify({ type: "paired" }));
-
-    console.log("Paired two clients");
-    return;
-  }
-
-  waitingQueue.push(ws);
-  activeUsers.set(ws, { partner: null, state: "waiting" });
-  console.log("Added client to waiting queue");
-}
-
-function handleNext(ws) {
-  const user = activeUsers.get(ws);
-
-  if (user?.partner) {
-    const partner = user.partner;
-
-    if (partner.readyState === WebSocket.OPEN) {
-      partner.send(JSON.stringify({ type: "partner-disconnected" }));
-      activeUsers.set(partner, { partner: null, state: "waiting" });
-      waitingQueue.push(partner);
-      console.log("Partner pushed back to waiting queue");
-    }
-  }
-
-  activeUsers.set(ws, { partner: null, state: "waiting" });
-  tryToPair(ws);
-}
-
-wss.on("connection", (ws) => {
-  console.log("New client connected");
-  tryToPair(ws);
-
-  ws.on("message", (msg) => {
-    let data;
-    try {
-      data = JSON.parse(msg);
-    } catch (e) {
-      console.error("Invalid JSON:", msg);
-      return;
-    }
-
-    const user = activeUsers.get(ws);
-    const partner = user?.partner;
-
-    if (data.type === "next") {
-      console.log("Received 'next' from client");
-      handleNext(ws);
-    } else if (data.type === "chat" && partner?.readyState === WebSocket.OPEN) {
-      partner.send(JSON.stringify({ type: "chat", message: data.message }));
-    } else if (data.type === "signal" && partner?.readyState === WebSocket.OPEN) {
-      partner.send(JSON.stringify({ type: "signal", signal: data.signal }));
-    }
-  });
-
-  ws.on("close", () => {
-    console.log("Client disconnected");
-    const user = activeUsers.get(ws);
-    const partner = user?.partner;
-
-    if (partner?.readyState === WebSocket.OPEN) {
-      partner.send(JSON.stringify({ type: "partner-disconnected" }));
-      activeUsers.set(partner, { partner: null, state: "waiting" });
-      waitingQueue.push(partner);
-      console.log("Partner pushed back to waiting queue due to disconnect");
-    }
-
-    const i = waitingQueue.indexOf(ws);
-    if (i !== -1) waitingQueue.splice(i, 1);
-
-    activeUsers.delete(ws);
-  });
-});
-
-// Optional keep-alive ping
-setInterval(() => {
-  wss.clients.forEach((ws) => {
-    if (ws.readyState === WebSocket.OPEN) ws.ping();
-  });
-}, 30000);
 
 const PORT = 8080;
-server.listen(PORT, () =>
-  console.log(`Server running on ws://localhost:${PORT}`)
-);
+const allUsers = {};
+
+app.use(cors());
+
+app.get("/", (req, res) => {
+  res.send("Video chat server is running");
+});
+
+io.on("connection", (socket) => {
+  console.log("Client connected:", socket.id);
+
+  socket.on("join-user", (username) => {
+    allUsers[username] = socket.id;
+    io.emit("joined", allUsers);
+    console.log(`${username} joined with socket id ${socket.id}`);
+  });
+
+  socket.on("offer", ({ from, to, offer }) => {
+    const calleeSocketId = allUsers[to];
+    if (calleeSocketId) {
+      io.to(calleeSocketId).emit("offer", { from, to, offer });
+    }
+  });
+
+  socket.on("answer", ({ from, to, answer }) => {
+    const callerSocketId = allUsers[to];
+    if (callerSocketId) {
+      io.to(callerSocketId).emit("answer", { from, to, answer });
+    }
+  });
+
+  socket.on("icecandidate", ({ from, to, candidate }) => {
+    const otherSocketId = allUsers[to];
+    if (otherSocketId) {
+      io.to(otherSocketId).emit("icecandidate", candidate);
+    }
+  });
+
+  socket.on("call-ended", ([from, to]) => {
+    if (allUsers[from]) io.to(allUsers[from]).emit("call-ended");
+    if (allUsers[to]) io.to(allUsers[to]).emit("call-ended");
+  });
+
+  socket.on("disconnect", () => {
+    for (const [username, id] of Object.entries(allUsers)) {
+      if (id === socket.id) {
+        delete allUsers[username];
+        break;
+      }
+    }
+    io.emit("joined", allUsers);
+    console.log(`Client disconnected: ${socket.id}`);
+  });
+});
+
+server.listen(PORT, () => {
+  console.log(`Server is running at http://localhost:${PORT}`);
+});
