@@ -7,7 +7,7 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: "https://video-chat-82u9.onrender.com", // change this to your frontend domain in production
+    origin: "http://localhost:5173", // change this to your frontend domain in production
     methods: ["GET", "POST"],
   },
 });
@@ -54,6 +54,12 @@ io.on("connection", (socket) => {
   socket.on("call-ended", ([from, to]) => {
     if (allUsers[from]) io.to(allUsers[from]).emit("call-ended");
     if (allUsers[to]) io.to(allUsers[to]).emit("call-ended");
+  });
+  socket.on("chat-message", ({ from, to, message }) => {
+    const recipientSocketId = allUsers[to];
+    if (recipientSocketId) {
+      io.to(recipientSocketId).emit("chat-message", { from, message });
+    }
   });
 
   socket.on("disconnect", () => {
