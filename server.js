@@ -6,71 +6,70 @@ const cors = require("cors");
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
-  cors: {
-    origin: "https://video-chat-82u9.onrender.com", // change this to your frontend domain in production
-    methods: ["GET", "POST"],
-  },
+  cors: { origin: "http://localhost:5173", methods: ["GET", "POST"] },
 });
 
 const PORT = 8080;
-const allUsers = {};
 
-app.use(cors());
-
-app.get("/", (req, res) => {
-  res.send("Video chat server is running");
-});
+let waitingUser = null;
+const activeCalls = new Map();
 
 io.on("connection", (socket) => {
-  console.log("Client connected:", socket.id);
+  console.log("User connected:", socket.id);
 
-  socket.on("join-user", (username) => {
-    allUsers[username] = socket.id;
-    io.emit("joined", allUsers);
-    console.log(`${username} joined with socket id ${socket.id}`);
-  });
+  socket.on("find-partner", () => {
+    if (waitingUser && waitingUser !== socket.id) {
+      const partner = waitingUser;
+      waitingUser = null;
 
-  socket.on("offer", ({ from, to, offer }) => {
-    const calleeSocketId = allUsers[to];
-    if (calleeSocketId) {
-      io.to(calleeSocketId).emit("offer", { from, to, offer });
+      activeCalls.set(socket.id, partner);
+      activeCalls.set(partner, socket.id);
+
+      // Tell the new user to wait for an offer
+      io.to(socket.id).emit("waiting-offer", { from: partner });
+
+      // Tell the waiting user to create an offer
+      io.to(partner).emit("create-offer", { to: socket.id });
+    } else {
+      waitingUser = socket.id;
     }
   });
 
-  socket.on("answer", ({ from, to, answer }) => {
-    const callerSocketId = allUsers[to];
-    if (callerSocketId) {
-      io.to(callerSocketId).emit("answer", { from, to, answer });
-    }
+  socket.on("offer", ({ to, offer }) => {
+    io.to(to).emit("offer", { from: socket.id, offer });
   });
 
-  socket.on("icecandidate", ({ from, to, candidate }) => {
-    const otherSocketId = allUsers[to];
-    if (otherSocketId) {
-      io.to(otherSocketId).emit("icecandidate", candidate);
-    }
+  socket.on("answer", ({ to, answer }) => {
+    io.to(to).emit("answer", { from: socket.id, answer });
   });
 
-  socket.on("call-ended", ([from, to]) => {
-    if (allUsers[from]) io.to(allUsers[from]).emit("call-ended");
-    if (allUsers[to]) io.to(allUsers[to]).emit("call-ended");
+  socket.on("icecandidate", ({ to, candidate }) => {
+    io.to(to).emit("icecandidate", candidate);
   });
-  socket.on("chat-message", ({ from, to, message }) => {
-    const recipientSocketId = allUsers[to];
-    if (recipientSocketId) {
-      io.to(recipientSocketId).emit("chat-message", { from, message });
-    }
+
+  socket.on("chat-message", ({ to, message }) => {
+    io.to(to).emit("chat-message", { from: socket.id, message });
+  });
+
+  socket.on("call-ended", (partnerId) => {
+    activeCalls.delete(socket.id);
+    activeCalls.delete(partnerId);
+    io.to(partnerId).emit("call-ended");
   });
 
   socket.on("disconnect", () => {
-    for (const [username, id] of Object.entries(allUsers)) {
-      if (id === socket.id) {
-        delete allUsers[username];
-        break;
-      }
+    const partner = activeCalls.get(socket.id);
+    if (partner) {
+      activeCalls.delete(partner);
+      io.to(partner).emit("user-left");
     }
-    io.emit("joined", allUsers);
-    console.log(`Client disconnected: ${socket.id}`);
+
+    if (waitingUser === socket.id) {
+      waitingUser = null;
+    }
+
+    activeCalls.delete(socket.id);
+    console.log("User disconnected:", socket.id);
   });
 });
 
